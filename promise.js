@@ -2,129 +2,77 @@ const PENDING = "PENDING";
 const FULFILLED = "FULFILLED";
 const REJECTED = "REJECTED";
 
-export default function Promise(executor) {
-  // store state which can be PENDING, FULFILLED or REJECTED
-  this.state = PENDING;
-  // store value or error once FULFILLED or REJECTED
-  this.value = undefined;
-  // store success & failure handlers attached by calling .then or .done
-  this.handlers = [];
+export default class Promise {
+  constructor(executor) {
+    this.state = PENDING;
+    this.value = null;
 
-  const fulfill = (result) => {
-    this.state = FULFILLED;
-    this.value = result;
-    this.handlers.forEach(this.handle);
-    this.handlers = [];
-  };
+    this.onFulfilledCallbacks = [];
+    this.onRejectedCallbacks = [];
 
-  const reject = (error) => {
-    this.state = REJECTED;
-    this.value = error;
-    this.handlers.forEach(handle);
-    this.handlers = [];
-  };
+    let done = false;
 
-  const resolve = (result) => {
+    const resolve = (result) => {
+      if (done) return;
+      done = true;
+      this.state = FULFILLED;
+      this.value = result;
+      this.onFulfilledCallbacks.forEach((fn) => fn());
+      this.onFulfilledCallbacks = [];
+    };
+
+    const reject = (reason) => {
+      if (done) return;
+      done = true;
+      this.state = REJECTED;
+      this.value = reason;
+      this.onRejectedCallbacks.forEach((fn) => fn());
+      this.onRejectedCallbacks = [];
+    };
+
     try {
-      const then = getThen(result);
-      if (then) {
-        doResolve(then.bind(result), fulfill, reject);
-        return;
-      }
-      fulfill(result);
+      executor(resolve, reject);
     } catch (error) {
       reject(error);
     }
-  };
-
-  const handle = (handler) => {
-    if (this.state === PENDING) {
-      this.handlers.push(handler);
-    } else {
-      if (
-        this.state === FULFILLED &&
-        typeof handler.onFulfilled === "function"
-      ) {
-        handler.onFulfilled(this.value);
-      }
-      if (this.state === REJECTED && typeof handler.onRejected === "function") {
-        handler.onRejected(this.value);
-      }
-    }
-  };
-
-  this.done = (onFulfilled, onRejected) => {
-    // ensure we are always asynchronous
-    setTimeout(() => {
-      handle({ onFulfilled, onRejected });
-    }, 0);
-  };
-
-  this.then = (onFulfilled, onRejected) => {
-    return new Promise((resolve, reject) => {
-      return this.done(
-        (result) => {
-          if (typeof onFulfilled === "function") {
-            try {
-              return resolve(onFulfilled(result));
-            } catch (error) {
-              return reject(error);
-            }
-          } else {
-            return resolve(result);
-          }
-        },
-        (error) => {
-          if (typeof onRejected === "function") {
-            try {
-              return resolve(onRejected(error));
-            } catch (error) {
-              return reject(error);
-            }
-          } else {
-            return reject(error);
-          }
-        }
-      );
-    });
-  };
-
-  doResolve(executor, resolve, reject);
-}
-
-// Check if a value is a Promise and, if it is, return the `then` method of that promise.
-function getThen(value) {
-  const t = typeof value;
-  if (value & (t === "object" || t === "function")) {
-    const then = value.then;
-    if (typeof then === "function") {
-      return then;
-    }
   }
-  return null;
-}
 
-// Take a potentially misbehaving resolver function and make sure
-// onFulfilled and onRejected are only called once.
-// Makes no guarantees about asynchrony.
-function doResolve(fn, onFulfilled, onRejected) {
-  let done = false;
-  try {
-    fn(
-      (value) => {
-        if (done) return;
-        done = true;
-        onFulfilled(value);
-      },
-      (reason) => {
-        if (done) return;
-        done = true;
-        onRejected(reason);
+  then(onFulfilled, onRejected) {
+    return new Promise((resolve, reject) => {
+      const wrappedOnFulfilled = () => {
+        try {
+          const fulfilledFromLastPromise = onFulfilled(this.value);
+          if (fulfilledFromLastPromise instanceof Promise) {
+            fulfilledFromLastPromise.then(resolve, reject);
+          } else {
+            resolve(fulfilledFromLastPromise);
+          }
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const wrappedOnRejected = () => {
+        try {
+          const rejectedFromLastPromise = onRejected(this.value);
+          if (rejectedFromLastPromise instanceof Promise) {
+            rejectedFromLastPromise.then(resolve, reject);
+          } else {
+            reject(rejectedFromLastPromise);
+          }
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      if (this.state === PENDING) {
+        this.onFulfilledCallbacks.push(wrappedOnFulfilled);
+        this.onRejectedCallbacks.push(wrappedOnRejected);
+      } else if (this.state === FULFILLED) {
+        wrappedOnFulfilled();
+      } else if (this.state === REJECTED) {
+        wrappedOnRejected();
       }
-    );
-  } catch (error) {
-    if (done) return;
-    done = true;
-    onRejected(error);
+    });
   }
 }
